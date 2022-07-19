@@ -20,8 +20,6 @@ pDNS1 --> spoke1 : link/autoreg
 pDNS1 --> spoke2 : link/autoreg
 pDNS1: pzone1.myedge.org
 pDNS2 --> hub : link/resolve
-pDNS2 --> spoke1 : link/resolve
-pDNS2 --> spoke2 : link/resolve
 pDNS2: pzone2.myedge.org
 hub --> spoke1 : peering
 hub --> spoke2 : peering
@@ -274,6 +272,9 @@ az group delete -n $prefix -y
 
 ~~~ bash
 git status
+git add *
+git commit -m"update diagram"
+git push origin master
 ~~~
 
 
