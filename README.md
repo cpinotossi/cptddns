@@ -1,8 +1,6 @@
-# Azure DNS
+# Azure DNS Demos
 
 ## How does Azure Private DNS auto registration look like?
-
-### Goal
 
 - Setup a simple hub and spoke vnet architecture.
 - Create a VM on each vnet.
@@ -13,148 +11,179 @@
 - Verify if A-records are auto populated into the private dns zone
 - log into vm and test dns resolution
 
-### Create resource group
+Target Enviroment.
 
-~~~bash
+~~~ mermaid
+classDiagram
+pDNS1 --> hub : link/autoreg
+pDNS1 --> spoke1 : link/autoreg
+pDNS1 --> spoke2 : link/autoreg
+pDNS1: pzone1.myedge.org
+pDNS2 --> hub : link/resolve
+pDNS2 --> spoke1 : link/resolve
+pDNS2 --> spoke2 : link/resolve
+pDNS2: pzone2.myedge.org
+hub --> spoke1 : peering
+hub --> spoke2 : peering
+hub : bastion
+hub : cidr 10.0.0.0/16
+spoke1 : cidr 10.1.0.0/16
+spoke2 : cidr 10.2.0.0/16
+hub : vm 10.0.0.4
+spoke1 : vm 10.1.0.4
+spoke2 : vm 10.2.0.4
+~~~
+
+Create enviroment. 
+
+~~~ bash
+prefix=cptddns
+location=eastus
 az group create -l eastus -n cptddns
+myid=$(az ad user list --query '[?displayName==`ga`].id' -o tsv) # my obj id
+# Create the enviroment
+az deployment group create -g $prefix -n create --template-file deploy.bicep --parameters myObjectId=$myid location=$location prefix=$prefix
+az group delete -n $prefix -y
 ~~~
 
-### Modify Parameters File
+Verify vnet peering.
 
-Retrieve your Object ID
-
-~~~bash
-az ad user list --query '[?displayName==`ga`].objectId'
+~~~ bash
+az network vnet list --query "[?resourceGroup=='${prefix}'].{name:name,subnets:subnets[].name,virtualNetworkPeering:virtualNetworkPeerings[].name}"
 ~~~
 
-### Create the enviroment
+Result:
 
-~~~bash
-az deployment group create -g cptddns -n create --template-file dns01.bicep
-~~~
-
-### Verify hub and spoke peering of vnet´s
-
-~~~bash
-az network vnet list --query '[?resourceGroup==`cptddns`].{name:name,subnets:subnets[].name,virtualNetworkPeering:virtualNetworkPeerings[].name}'
+~~~ json
 [
   {
-    "name": "cptddns-hub",
+    "name": "cptddnshub",
     "subnets": [
-      "hub-sn",
+      "cptddnshub",
       "AzureBastionSubnet"
     ],
     "virtualNetworkPeering": [
-      "hub-spoke1",
-      "hub-spoke2"
+      "hub-spoke2",
+      "hub-spoke1"
     ]
   },
   {
-    "name": "cptddns-spoke1",
+    "name": "cptddnsspoke1",
     "subnets": [
-      "spoke1-sn"
+      "cptddnsspoke1"
     ],
-    "virtualNetworkPeering": []
+    "virtualNetworkPeering": [
+      "spoke1-hub"
+    ]
   },
   {
-    "name": "cptddns-spoke2",
+    "name": "cptddnsspoke2",
     "subnets": [
-      "spoke2-sn"
+      "cptddnsspoke2"
     ],
-    "virtualNetworkPeering": []
+    "virtualNetworkPeering": [
+      "spoke2-hub"
+    ]
   }
 ]
 ~~~
 
-### List all VMs
+List vn names.
 
-~~~bash
-az vm list -g cptddns --query '[].{name:name,networkProfile:networkProfile.networkInterfaces[].id}'
+~~~ bash
+az vm list -g $prefix --query '[].{name:name,networkProfile:networkProfile.networkInterfaces[].id}' --query [].name -o tsv
+~~~
+
+Result
+
+~~~ json
+[
+  "cptddnshub",
+  "cptddnsspoke1",
+  "cptddnsspoke2"
+]
+~~~
+
+List VM/NICs ips.
+
+~~~ bash
+az network nic list -g $prefix --query '[].{name:name,privateIpAddress:ipConfigurations[0].privateIpAddress}'
+~~~
+
+Result.
+
+~~~ json
 [
   {
-    "name": "cptddnsvmhub",
-    "networkProfile": [
-      "/subscriptions/MY-SUB-ID/resourceGroups/cptddns/providers/Microsoft.Network/networkInterfaces/cptddnshub-nic"
-    ]
+    "name": "cptddnshub",
+    "privateIpAddress": "10.0.0.4"
   },
   {
-    "name": "cptddnsvmspoke1",
-    "networkProfile": [
-      "/subscriptions/MY-SUB-ID/resourceGroups/cptddns/providers/Microsoft.Network/networkInterfaces/cptddnsspoke1-nic"
-    ]
+    "name": "cptddnsspoke1",
+    "privateIpAddress": "10.1.0.4"
   },
   {
-    "name": "cptddnsvmspoke2",
-    "networkProfile": [
-      "/subscriptions/MY-SUB-ID/resourceGroups/cptddns/providers/Microsoft.Network/networkInterfaces/cptddnsspoke2-nic"
-    ]
+    "name": "cptddnsspoke2",
+    "privateIpAddress": "10.2.0.4"
   }
 ]
 ~~~
 
-### List all NICs inside the resource Group
+Verify private DNS Zone
 
-~~~bash
-az network nic list -g cptddns --query '[].{name:name,priavteIpAddress:ipConfigurations[0].privateIpAddress}'
-[
-  {
-    "name": "cptddnshub-nic",
-    "priavteIpAddress": "10.0.0.4"
-  },
-  {
-    "name": "cptddnsspoke1-nic",
-    "priavteIpAddress": "10.1.0.4"
-  },
-  {
-    "name": "cptddnsspoke2-nic",
-    "priavteIpAddress": "10.2.0.4"
-  }
-]
+~~~ bash
+az network private-dns zone list -g $prefix --query '[].{name:name,numberOfRecordSets:numberOfRecordSets}'
 ~~~
 
-### Verify new private DNS Zone
+Result
 
-~~~bash
-az network private-dns zone list -g cptddns --query '[].{name:name,numberOfRecordSets:numberOfRecordSets}'
+~~~ json
 [
   {
     "name": "pzone1.myedge.org",
     "numberOfRecordSets": 6
+  },
+  {
+    "name": "pzone2.myedge.org",
+    "numberOfRecordSets": 1
   }
 ]
 ~~~
 
 ### Why 6 a records?
 
+When you enable autoregistration on a virtual network link, the DNS records for the virtual machines in that virtual network are registered in the private zone. When autoregistration gets enabled, Azure DNS will update the zone record whenever a virtual machine gets created, changes its' IP address, or gets deleted.
+
 List all A Records
 
-~~~bash
-az network private-dns record-set a list -gcptddns -z pzone1.myedge.org --query '[].{aRecords:aRecords[0].ipv4Address,fqdn:fqdn,ttl:ttl}'
+~~~ bash
+z1=$(az network private-dns zone list -g $prefix --query '[0].name' -o tsv)
+az network private-dns record-set a list -g $prefix -z $z1 --query '[].{aRecords:aRecords[0].ipv4Address,fqdn:fqdn}'
+~~~
+
+Result
+
+~~~ json
 [
   {
     "aRecords": "10.0.0.4",
-    "fqdn": "cptddnsvmhub.pzone1.myedge.org.",
-    "ttl": 10
+    "fqdn": "cptddnshub.pzone1.myedge.org."
   },
   {
     "aRecords": "10.1.0.4",
-    "fqdn": "cptddnsvmspoke1.pzone1.myedge.org.",
-    "ttl": 10
+    "fqdn": "cptddnsspoke1.pzone1.myedge.org."
   },
   {
     "aRecords": "10.2.0.4",
-    "fqdn": "cptddnsvmspoke2.pzone1.myedge.org.",
-    "ttl": 10
-  },
-  {
-    "aRecords": "10.0.1.5",
-    "fqdn": "vm000000.pzone1.myedge.org.",
-    "ttl": 10
+    "fqdn": "cptddnsspoke2.pzone1.myedge.org."
   },
   {
     "aRecords": "10.0.1.4",
-    "fqdn": "vm000001.pzone1.myedge.org.",
-    "ttl": 10
+    "fqdn": "vm000000.pzone1.myedge.org."
+  },
+  {
+    "aRecords": "10.0.1.5",
+    "fqdn": "vm000001.pzone1.myedge.org."
   }
 ]
 ~~~
@@ -162,26 +191,39 @@ az network private-dns record-set a list -gcptddns -z pzone1.myedge.org --query 
 ANSWER:
 vm000000 and vm000001 belong to Azure Bastion Host.
 
+### Resolve spoke1 vm from hub vm
+
+~~~ bash
+vmhubid=$(az vm show -g $prefix -n ${prefix}hub --query id -o tsv)
+az network bastion ssh -n $prefix -g $prefix --target-resource-id $vmhubid --auth-type "AAD" # login with bastion
+dig cptddnsspoke1.pzone1.myedge.org # Expect 10.1.0.4
+dig cptddnsspoke2.pzone1.myedge.org # Expect 10.2.0.4
+~~~
 
 ### Verify how the private DNS zone is linked with vnets
 
 ~~~bash
-az network private-dns link vnet list -g cptddns -z pzone1.myedge.org --query '[].{name:name,virtualNetwork:virtualNetwork.id, registrationEnabled:registrationEnabled}'
+az network private-dns link vnet list -g $prefix -z $z1 --query '[].{name:name,virtualNetwork:virtualNetwork.id, registrationEnabled:registrationEnabled}'
+~~~
+
+Result
+
+~~~ json
 [
   {
     "name": "link2hub",
     "registrationEnabled": true,
-    "virtualNetwork": "/subscriptions/MY-SUB-ID/resourceGroups/cptddns/providers/Microsoft.Network/virtualNetworks/cptddns-hub"
+    "virtualNetwork": "/subscriptions/f474dec9-5bab-47a3-b4d3-e641dac87ddb/resourceGroups/cptddns/providers/Microsoft.Network/virtualNetworks/cptddnshub"
   },
   {
     "name": "link2spoke1",
     "registrationEnabled": true,
-    "virtualNetwork": "/subscriptions/MY-SUB-ID/resourceGroups/cptddns/providers/Microsoft.Network/virtualNetworks/cptddns-spoke1"
+    "virtualNetwork": "/subscriptions/f474dec9-5bab-47a3-b4d3-e641dac87ddb/resourceGroups/cptddns/providers/Microsoft.Network/virtualNetworks/cptddnsspoke1"
   },
   {
     "name": "link2spoke2",
     "registrationEnabled": true,
-    "virtualNetwork": "/subscriptions/MY-SUB-ID/resourceGroups/cptddns/providers/Microsoft.Network/virtualNetworks/cptddns-spoke2"
+    "virtualNetwork": "/subscriptions/f474dec9-5bab-47a3-b4d3-e641dac87ddb/resourceGroups/cptddns/providers/Microsoft.Network/virtualNetworks/cptddnsspoke2"
   }
 ]
 ~~~
@@ -190,46 +232,52 @@ NOTE:
 > "registrationEnabled": true 
 The value "true" indicates that we used "autoregistration".
 
-### Resolve from Hub vnet
+### Link one more private DNS zone
 
-Retrieve VM resource Id
+Link one more private dns zone to the hub vnet.
 
-~~~bash
-vmhub=$(az vm show -g cptddns -n cptddnsvmhub --query id|sed 's/"//g')
+~~~ bash
+z2=$(az network private-dns zone list -g $prefix --query '[1].name' -o tsv)
+vnethubid=$(az network vnet show -g $prefix -n ${prefix}hub --query id -o tsv)
+az network private-dns link vnet create -n z2hub -g $prefix -e false -v $vnethubid -z $z2 
+az network private-dns record-set a add-record -g $prefix -z $z2 -n $prefix -a 10.10.10.10
+az network private-dns record-set a list -g $prefix -z $z2 --query '[].{aRecords:aRecords[0].ipv4Address,fqdn:fqdn}'
+vmhubid=$(az vm show -g $prefix -n ${prefix}hub --query id -o tsv)
+az network bastion ssh -n $prefix -g $prefix --target-resource-id $vmhubid --auth-type "AAD" # login with bastion
+dig cptddnsspoke1.pzone1.myedge.org # Expect 10.1.0.4
+dig cptddns.pzone2.myedge.org # Expect 10.10.10.10
+logout
 ~~~
 
-Log into VM via Bastion
+Conclusion:
+- You can link multiple private DNS zones to a single VNet for resolving. 
+- You can only link one private DNS zone to a single VNet for autoregistration.
+ - A single VNet cannot link with autoregistration to multiple private DNS zones. 
 
-~~~bash
-az network bastion ssh -n cpddns -g cptddns --target-resource-id $vmhub --auth-type AAD
+From the official FAQ:
+- Q: Can the same private zone be used for several virtual networks for resolution?
+ - A: Yes. You can link a private DNS zone with thousands of virtual networks. For more information, see Azure DNS Limits
+
+A specific virtual network can be linked to only one private DNS zone when automatic VM DNS registration is enabled. You can, however, link multiple virtual networks to a single DNS zone
+(source: https://docs.microsoft.com/en-us/azure/dns/private-dns-autoregistration#restrictions)
+
+
+### Clean up
+
+~~~ bash
+az group delete -n $prefix -y
 ~~~
 
-IMPORTANT: Did not work via my WSL. So I did went through the azure portal to use bastion.
+## Misc
 
-Execute DNS lookup inside the vm
+### Git
 
-~~~bash
-chpinoto@cptddnsvmhub:~$ dig cptddnsvmspoke1.pzone1.myedge.org
-
-; <<>> DiG 9.11.3-1ubuntu1.16-Ubuntu <<>> cptddnsvmspoke1.pzone1.myedge.org
-;; global options: +cmd
-;; Got answer:
-;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 4360
-;; flags: qr rd ra; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 1
-
-;; OPT PSEUDOSECTION:
-; EDNS: version: 0, flags:; udp: 65494
-;; QUESTION SECTION:
-;cptddnsvmspoke1.pzone1.myedge.org. INA
-
-;; ANSWER SECTION:
-cptddnsvmspoke1.pzone1.myedge.org. 10 IN A10.1.0.4
-
-;; Query time: 12 msec
-;; SERVER: 127.0.0.53#53(127.0.0.53)
-;; WHEN: Fri Nov 26 12:29:14 UTC 2021
-;; MSG SIZE  rcvd: 78
+~~~ bash
+git status
 ~~~
+
+
+
 
 
 
